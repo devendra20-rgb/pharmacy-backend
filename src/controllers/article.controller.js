@@ -2,14 +2,89 @@ import Article from "../models/Article.js";
 import redis from "../config/redis.js";
 
 // POST /api/articles (unchanged)
+// export const createArticle = async (req, res) => {
+//   try {
+//     const article = await Article.create(req.body);
+//     if (redis) {
+//       await redis.del("articles:all");
+//     }
+//     res.status(201).json(article);
+//   } catch (error) {
+//     res.status(400).json({ message: error.message });
+//   }
+// };
+
 export const createArticle = async (req, res) => {
   try {
-    const article = await Article.create(req.body);
+    let articleData = { ...req.body };
+    console.log("Backend: Creating article with title:", articleData.title); // Debug log
+
+    // Generate slug if not provided
+    if (!articleData.slug) {
+      articleData.slug = slugify(articleData.title, {
+        lower: true,
+        strict: true,
+      });
+    }
+    console.log("Backend: Generated slug:", articleData.slug); // Log slug
+
+    // Try create, regenerate on unique error
+    let article;
+    let attempts = 0;
+    const maxAttempts = 10; // Increased for safety
+    while (attempts < maxAttempts) {
+      try {
+        article = await Article.create(articleData);
+        console.log(
+          `Backend: Article created successfully with slug: ${article.slug}, ID: ${article._id}`
+        ); // Success log
+        break;
+      } catch (error) {
+        console.error(
+          `Backend: Create attempt ${attempts + 1} failed:`,
+          error.message
+        ); // Error log
+        if (error.code === 11000 && error.keyPattern.slug) {
+          // Unique slug error
+          attempts++;
+          const baseSlug = articleData.slug;
+          articleData.slug = `${baseSlug}-${attempts}`;
+          console.log(
+            `Backend: Duplicate slug detected, regenerating: ${baseSlug} → ${articleData.slug}`
+          );
+        } else {
+          throw error; // Other errors
+        }
+      }
+    }
+
+    if (!article) {
+      console.error("Backend: Failed to create after all attempts");
+      return res
+        .status(400)
+        .json({
+          message: "Failed to create unique article after multiple attempts",
+        });
+    }
+
+    // Clear cache
     if (redis) {
       await redis.del("articles:all");
+      console.log("Backend: Cache cleared for articles:all");
     }
-    res.status(201).json(article);
+
+    // Return populated article
+    const populatedArticle = await Article.findById(article._id).populate(
+      "category",
+      "name"
+    );
+    console.log(
+      "Backend: Returning populated article:",
+      populatedArticle.title
+    );
+    res.status(201).json(populatedArticle);
   } catch (error) {
+    console.error("💥 Backend: Full Create Error:", error); // Full error log
     res.status(400).json({ message: error.message });
   }
 };
@@ -18,7 +93,7 @@ export const createArticle = async (req, res) => {
 export const getAllArticles = async (req, res) => {
   try {
     const articles = await Article.find({ isPublished: true })
-      .populate('category', 'name')  // Yeh add kar do – sirf name fetch karega, fast rahega
+      .populate("category", "name") // Yeh add kar do – sirf name fetch karega, fast rahega
       .sort({
         createdAt: -1,
       });
@@ -37,8 +112,7 @@ export const getArticleBySlug = async (req, res) => {
     const article = await Article.findOne({
       slug,
       isPublished: true,
-    })
-    .populate('category', 'name');  // Yeh add kar do
+    }).populate("category", "name"); // Yeh add kar do
 
     if (!article) {
       return res.status(404).json({ message: "Article not found" });
@@ -53,8 +127,10 @@ export const getArticleBySlug = async (req, res) => {
 // GET by ID (populate add kiya)
 export const getArticleById = async (req, res) => {
   try {
-    const article = await Article.findById(req.params.id)
-      .populate('category', 'name');  // Yeh add kar do
+    const article = await Article.findById(req.params.id).populate(
+      "category",
+      "name"
+    ); // Yeh add kar do
 
     if (!article) {
       return res.status(404).json({ message: "Article not found" });
@@ -80,7 +156,10 @@ export const updateArticle = async (req, res) => {
     await article.save(); // pre("save") hook chalega
 
     // Updated article with populate return karo
-    const updatedArticle = await Article.findById(article._id).populate('category', 'name');
+    const updatedArticle = await Article.findById(article._id).populate(
+      "category",
+      "name"
+    );
 
     // clear cache
     if (redis) {
