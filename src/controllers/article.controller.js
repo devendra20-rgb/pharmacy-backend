@@ -1,5 +1,6 @@
 import Article from "../models/Article.js";
 import redis from "../config/redis.js";
+import slugify from "slugify";
 
 // POST /api/articles (unchanged)
 // export const createArticle = async (req, res) => {
